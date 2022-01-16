@@ -1,4 +1,6 @@
-﻿using System.Net;
+﻿using HttpWebServer.HTTP;
+using HttpWebServer.Routing;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
@@ -9,12 +11,22 @@ namespace HttpWebServer
         private readonly IPAddress _ipAddress;
         private readonly int _port;
         private readonly TcpListener _tcpListener;
+        private readonly RoutingTable _routingTable;
 
-        public HttpServer(string ipAddress, int port)
+        public HttpServer(string ipAddress, int port, Action<IRoutingTable> routingTableConfiguration)
         {
             _ipAddress = IPAddress.Parse(ipAddress);
             _port = port;
             _tcpListener = new TcpListener(_ipAddress, _port);
+            routingTableConfiguration(_routingTable = new RoutingTable());
+        }
+
+        public HttpServer(int port, Action<IRoutingTable> routingTable) : this("127.0.0.1", port, routingTable)
+        {
+        }
+
+        public HttpServer(Action<IRoutingTable> routingTable) : this(8080, routingTable)
+        {
         }
 
         public void Start()
@@ -27,22 +39,48 @@ namespace HttpWebServer
             {
                 var connection = _tcpListener.AcceptTcpClient();
                 var networkStream = connection.GetStream();
-                WriteResponse(networkStream, "Hello World");
+                var requestText = ReadRequest(networkStream);
+                Console.WriteLine(requestText);
+                var request = Request.Parse(requestText);
+                var response = _routingTable.MatchRequest(request);
+
+                //Execute pre-render action for the response
+                if(response.PreRenderAction != null)
+                {
+                    response.PreRenderAction(request, response);
+                }
+
+                WriteResponse(networkStream, response);
                 connection.Close();
             }
         }
 
-        private static void WriteResponse(NetworkStream networkStream, string content)
+        private void WriteResponse(NetworkStream networkStream, Response response)
         {
-            var contentLength = Encoding.UTF8.GetByteCount(content);
-            var response = $@"HTTP/1.1 200 OK 
-                            Content-Type: text/plain; charset=UTF-8
-                            Content-Length: {contentLength}
-                            
-                            {content}";
+            var responseBytes = Encoding.UTF8.GetBytes(response.ToString());
+            networkStream.Write(responseBytes);
+        }
 
-            var responseBytes = Encoding.UTF8.GetBytes(response);
-            networkStream.Write(responseBytes, 0, responseBytes.Length);
+        private string ReadRequest(NetworkStream networkStream)
+        {
+            var buffer = new byte[1024];
+            var requestBuilder = new StringBuilder();
+            var bytesTotal = 0;
+
+            do
+            {
+                var readBytes = networkStream.Read(buffer, 0, buffer.Length);
+                bytesTotal += readBytes;
+
+                if(bytesTotal > 10 * 2024)
+                {
+                    throw new InvalidOperationException("Request is too large");
+                }
+
+                requestBuilder.Append(Encoding.UTF8.GetString(buffer, 0, readBytes));
+            }
+            while (networkStream.DataAvailable);
+            return requestBuilder.ToString();
         }
     }
 }

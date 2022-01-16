@@ -1,8 +1,10 @@
-﻿using System;
+﻿using HttpWebServer.HTTP;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Web;
 
 namespace HttpWebServer
 {
@@ -16,6 +18,8 @@ namespace HttpWebServer
 
         public string Body { get; private set; }
 
+        public IReadOnlyDictionary<string, string> Form { get; private set; }
+
         public static Request Parse(string request)
         {
             var lines = request.Split("\r\n");
@@ -25,14 +29,44 @@ namespace HttpWebServer
             var headers = ParseHeaders(lines.Skip(1));
             var bodyLines = lines.Skip(headers.Count + 2);
             var body = string.Join("\r\n", bodyLines);
+            var form = ParseForm(headers, body);
 
             return new Request
             {
                 Method = method,
                 Url = url,
                 Headers = headers,
-                Body = body
+                Body = body,
+                Form = form
             };
+        }
+
+        private static Dictionary<string, string> ParseForm(HeaderCollection headers, string body)
+        {
+            var formCollection = new Dictionary<string, string>();
+            if (headers.Contains(Header.ContentType)
+                && headers[Header.ContentType] == ContentType.FormUrlEncoded)
+            {
+                var parsedResult = ParseFormData(body);
+
+                foreach(var (name, value) in parsedResult)
+                {
+                    formCollection.Add(name, value);
+                }
+            }
+
+            return formCollection;
+        }
+
+        private static Dictionary<string, string> ParseFormData(string bodyLines)
+        {
+            return HttpUtility.UrlDecode(bodyLines)
+                .Split('&')
+                .Select(p => p.Split('='))
+                .Where(p => p.Length == 2)
+                .ToDictionary(p => p[0],
+                              p => p[1],
+                              StringComparer.InvariantCultureIgnoreCase);
         }
 
         private static HeaderCollection ParseHeaders(IEnumerable<string> lines)
@@ -61,7 +95,7 @@ namespace HttpWebServer
         {
             try
             {
-                Enum.TryParse<Method>(method, out Method result);
+                var result = Enum.Parse<Method>(method, true);
                 return result;
             }
             catch (ArgumentException)
@@ -69,6 +103,5 @@ namespace HttpWebServer
                 throw new InvalidOperationException($"Method {method} is not supported");
             }
         }
-
     }
 }
