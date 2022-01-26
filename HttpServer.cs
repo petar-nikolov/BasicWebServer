@@ -29,7 +29,7 @@ namespace HttpWebServer
         {
         }
 
-        public void Start()
+        public async Task Start()
         {
             _tcpListener.Start();
             Console.WriteLine($"Server is listening on port: {_port}");
@@ -37,31 +37,46 @@ namespace HttpWebServer
 
             while (true)
             {
-                var connection = _tcpListener.AcceptTcpClient();
-                var networkStream = connection.GetStream();
-                var requestText = ReadRequest(networkStream);
-                Console.WriteLine(requestText);
-                var request = Request.Parse(requestText);
-                var response = _routingTable.MatchRequest(request);
+                var connection = await _tcpListener.AcceptTcpClientAsync();
 
-                //Execute pre-render action for the response
-                if(response.PreRenderAction != null)
+                _ = Task.Run(async () =>
                 {
-                    response.PreRenderAction(request, response);
-                }
+                    var networkStream = connection.GetStream();
+                    var requestText = await ReadRequestAsync(networkStream);
+                    Console.WriteLine(requestText);
+                    var request = Request.Parse(requestText);
+                    var response = _routingTable.MatchRequest(request);
 
-                WriteResponse(networkStream, response);
-                connection.Close();
+                    //Execute pre-render action for the response
+                    if (response.PreRenderAction != null)
+                    {
+                        response.PreRenderAction(request, response);
+                    }
+
+                    AddSession(request, response);
+                    await WriteResponseAsync(networkStream, response);
+                    connection.Close();
+                });
             }
         }
 
-        private void WriteResponse(NetworkStream networkStream, Response response)
+        private void AddSession(Request request, Response response)
         {
-            var responseBytes = Encoding.UTF8.GetBytes(response.ToString());
-            networkStream.Write(responseBytes);
+            var sessionExists = request.Session.ContainsKey(Session.SessionCookieDateKey);
+            if (!sessionExists)
+            {
+                request.Session[Session.SessionCookieDateKey] = DateTime.Now.ToString();
+                response.Cookies.Add(Session.SessionCookieName, request.Session.Id);
+            }
         }
 
-        private string ReadRequest(NetworkStream networkStream)
+        private async Task WriteResponseAsync(NetworkStream networkStream, Response response)
+        {
+            var responseBytes = Encoding.UTF8.GetBytes(response.ToString());
+            await networkStream.WriteAsync(responseBytes);
+        }
+
+        private async Task<string> ReadRequestAsync(NetworkStream networkStream)
         {
             var buffer = new byte[1024];
             var requestBuilder = new StringBuilder();
@@ -69,7 +84,7 @@ namespace HttpWebServer
 
             do
             {
-                var readBytes = networkStream.Read(buffer, 0, buffer.Length);
+                var readBytes = await networkStream.ReadAsync(buffer, 0, buffer.Length);
                 bytesTotal += readBytes;
 
                 if(bytesTotal > 10 * 2024)

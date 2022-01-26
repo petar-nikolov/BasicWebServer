@@ -1,22 +1,23 @@
 ﻿using HttpWebServer.HTTP;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Web;
 
 namespace HttpWebServer
 {
     public class Request
     {
+        private static Dictionary<string, Session> Sessions = new();
+
         public Method Method { get; private set; }
 
         public string Url { get; private set; }
 
         public HeaderCollection Headers { get; private set; }
 
+        public CookieCollection Cookies { get; private set; }
+
         public string Body { get; private set; }
+
+        public Session Session { get; set; }
 
         public IReadOnlyDictionary<string, string> Form { get; private set; }
 
@@ -27,9 +28,11 @@ namespace HttpWebServer
             var url = firstLine[1];
             var method = ParseMethod(firstLine[0]);
             var headers = ParseHeaders(lines.Skip(1));
+            var cookies = ParseCookies(headers);
             var bodyLines = lines.Skip(headers.Count + 2);
             var body = string.Join("\r\n", bodyLines);
             var form = ParseForm(headers, body);
+            var session = GetSession(cookies);
 
             return new Request
             {
@@ -37,8 +40,24 @@ namespace HttpWebServer
                 Url = url,
                 Headers = headers,
                 Body = body,
-                Form = form
+                Form = form,
+                Cookies = cookies,
+                Session = session
             };
+        }
+
+        private static Session GetSession(CookieCollection cookies)
+        {
+            var sessionId = cookies.Contains(Session.SessionCookieName)
+                ? cookies[Session.SessionCookieName]
+                : Guid.NewGuid().ToString();
+
+            if (!Sessions.ContainsKey(sessionId))
+            {
+                Sessions[sessionId] = new Session(sessionId);
+            }
+
+            return Sessions[sessionId];
         }
 
         private static Dictionary<string, string> ParseForm(HeaderCollection headers, string body)
@@ -49,7 +68,7 @@ namespace HttpWebServer
             {
                 var parsedResult = ParseFormData(body);
 
-                foreach(var (name, value) in parsedResult)
+                foreach (var (name, value) in parsedResult)
                 {
                     formCollection.Add(name, value);
                 }
@@ -102,6 +121,26 @@ namespace HttpWebServer
             {
                 throw new InvalidOperationException($"Method {method} is not supported");
             }
+        }
+
+        private static CookieCollection ParseCookies(HeaderCollection headers)
+        {
+            var cookieCollection = new CookieCollection();
+            if (headers.Contains(Header.Cookie))
+            {
+                var cookieHeader = headers[Header.Cookie];
+                var allCookies = cookieHeader.Split(';', StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var cookie in allCookies)
+                {
+                    var cookieParts = cookie.Split('=');
+                    var cookieName = cookieParts[0].Trim();
+                    var cookieValue = cookieParts[1].Trim();
+                    cookieCollection.Add(cookieName, cookieValue);
+                }
+            }
+
+            return cookieCollection;
         }
     }
 }
